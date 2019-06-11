@@ -145,6 +145,7 @@ typedef struct
    int datetime;                       /// Use DateTime instead of frame#
    int timestamp;                      /// Use timestamp instead of frame#
    int restart_interval;               /// JPEG restart interval. 0 for none.
+   int securityMode;                   /// Enable security mode and set buffer size
 
    RASPIPREVIEW_PARAMETERS preview_parameters;    /// Preview setup parameters
    RASPICAM_CAMERA_PARAMETERS camera_parameters; /// Camera setup parameters
@@ -194,6 +195,7 @@ enum
    CommandTimeStamp,
    CommandFrameStart,
    CommandRestartInterval,
+   CommandSecurityMode,
 };
 
 static COMMAND_LIST cmdline_commands[] =
@@ -213,6 +215,7 @@ static COMMAND_LIST cmdline_commands[] =
    { CommandGL,      "-gl",         "g",  "Draw preview to texture instead of using video render component", 0},
    { CommandGLCapture, "-glcapture","gc", "Capture the GL frame-buffer instead of the camera image", 0},
    { CommandBurstMode, "-burst",    "bm", "Enable 'burst capture mode'", 0},
+   { CommandSecurityMode, "-security",    "sm", "Enable 'security mode' timelapse with this many frames buffer", 1},
    { CommandDateTime,  "-datetime",  "dt", "Replace output pattern (%d) with DateTime (MonthDayHourMinSec)", 0},
    { CommandTimeStamp, "-timestamp", "ts", "Replace output pattern (%d) with unix timestamp (seconds since 1970)", 0},
    { CommandFrameStart,"-framestart","fs",  "Starting frame number in output pattern(%d)", 1},
@@ -297,6 +300,7 @@ static void default_status(RASPISTILL_STATE *state)
    state->useGL = 0;
    state->glCapture = 0;
    state->burstCaptureMode=0;
+   state->securityMode=0;
    state->datetime = 0;
    state->timestamp = 0;
    state->restart_interval = 0;
@@ -624,6 +628,17 @@ static int parse_cmdline(int argc, const char **argv, RASPISTILL_STATE *state)
       case CommandBurstMode:
          state->burstCaptureMode=1;
          break;
+
+      case CommandSecurityMode:
+      {
+         if (sscanf(argv[i + 1], "%u", &state->securityMode) == 1)
+         {
+            i++;
+         }
+         else
+            valid = 0;
+         break;
+      }
 
       case CommandRestartInterval:
       {
@@ -1399,11 +1414,11 @@ static void store_exif_tag(RASPISTILL_STATE *state, const char *exif_tag)
  * @return Returns a MMAL_STATUS_T giving result of operation
 */
 
-MMAL_STATUS_T create_filenames(char** finalName, char** tempName, char * pattern, int frame)
+MMAL_STATUS_T create_filenames(RASPISTILL_STATE *state, char** finalName, char** tempName, char * pattern, int frame)
 {
    *finalName = NULL;
    *tempName = NULL;
-   if (0 > asprintf(finalName, pattern, frame) ||
+   if (0 > asprintf(finalName, pattern, state->securityMode > 0 ? (frame%state->securityMode):frame) ||
          0 > asprintf(tempName, "%s~", *finalName))
    {
       if (*finalName != NULL)
@@ -1478,21 +1493,28 @@ static int wait_for_next_frame(RASPISTILL_STATE *state, int *frame)
 
          if (this_delay_ms < 0)
          {
-            // We are already past the next exposure time
-            if (-this_delay_ms < state->timelapse/2)
+            if (state->securityMode == 0)
             {
-               // Less than a half frame late, take a frame and hope to catch up next time
-               next_frame_ms += state->timelapse;
-               vcos_log_error("Frame %d is %d ms late", *frame, (int)(-this_delay_ms));
+               // We are already past the next exposure time
+               if (-this_delay_ms < state->timelapse/2)
+               {
+                  // Less than a half frame late, take a frame and hope to catch up next time
+                  next_frame_ms += state->timelapse;
+                  vcos_log_error("Frame %d is %d ms late", *frame, (int)(-this_delay_ms));
+               }
+               else
+               {
+                  int nskip = 1 + (-this_delay_ms)/state->timelapse;
+                  vcos_log_error("Skipping frame %d to restart at frame %d", *frame, *frame+nskip);
+                  *frame += nskip;
+                  this_delay_ms += nskip * state->timelapse;
+                  vcos_sleep(this_delay_ms);
+                  next_frame_ms += (nskip + 1) * state->timelapse;
+               }
             }
             else
             {
-               int nskip = 1 + (-this_delay_ms)/state->timelapse;
-               vcos_log_error("Skipping frame %d to restart at frame %d", *frame, *frame+nskip);
-               *frame += nskip;
-               this_delay_ms += nskip * state->timelapse;
-               vcos_sleep(this_delay_ms);
-               next_frame_ms += (nskip + 1) * state->timelapse;
+               next_frame_ms += state->timelapse;
             }
          }
          else
@@ -1613,7 +1635,7 @@ static void rename_file(RASPISTILL_STATE *state, FILE *output_file,
    {
       char *use_link;
       char *final_link;
-      status = create_filenames(&final_link, &use_link, state->linkname, frame);
+      status = create_filenames(state, &final_link, &use_link, state->linkname, frame);
 
       // Create hard link if possible, symlink otherwise
       if (status != MMAL_SUCCESS
@@ -1837,7 +1859,7 @@ int main(int argc, const char **argv)
                   else
                   {
                      vcos_assert(use_filename == NULL && final_filename == NULL);
-                     status = create_filenames(&final_filename, &use_filename, state.common_settings.filename, frame);
+                     status = create_filenames(&state, &final_filename, &use_filename, state.common_settings.filename, frame);
                      if (status  != MMAL_SUCCESS)
                      {
                         vcos_log_error("Unable to create filenames");
