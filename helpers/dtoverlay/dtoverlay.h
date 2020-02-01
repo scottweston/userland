@@ -71,15 +71,30 @@ typedef struct dtblob_struct
    int trailer_len;
 } DTBLOB_T;
 
+typedef struct pin_iter_struct
+{
+   DTBLOB_T *dtb;
+   const void *pinctrl;
+   int pinctrl_len;
+   int pinctrl_off;
+   const void *pins;
+   const void *funcs;
+   const void *pulls;
+   int pins_len;
+   int pin_off;
+   int funcs_len;
+   int pulls_len;
+} PIN_ITER_T;
 
 typedef void DTOVERLAY_LOGGING_FUNC(dtoverlay_logging_type_t type,
                                     const char *fmt, va_list args);
 
 typedef int (*override_callback_t)(int override_type,
+				   const char *override_value,
 				   DTBLOB_T *dtb, int node_off,
 				   const char *prop_name, int target_phandle,
 				   int target_off, int target_size,
-				   void *callback_value);
+				   void *callback_state);
 
 uint8_t dtoverlay_read_u8(const void *src, int off);
 uint16_t dtoverlay_read_u16(const void *src, int off);
@@ -116,25 +131,21 @@ const char *dtoverlay_find_override(DTBLOB_T *dtb, const char *override_name,
                                     int *data_len);
 
 int dtoverlay_override_one_target(int override_type,
+                                  const char *override_value,
                                   DTBLOB_T *dtb, int node_off,
                                   const char *prop_name, int target_phandle,
                                   int target_off, int target_size,
-                                  void *callback_value);
+                                  void *callback_state);
 
 int dtoverlay_foreach_override_target(DTBLOB_T *dtb, const char *override_name,
                                       const char *override_data, int data_len,
+                                      const char *override_value,
                                       override_callback_t callback,
                 		      void *callback_value);
 
 int dtoverlay_apply_override(DTBLOB_T *dtb, const char *override_name,
                              const char *override_data, int data_len,
                              const char *override_value);
-
-int dtoverlay_override_one_target(int override_type,
-				  DTBLOB_T *dtb, int node_off,
-				  const char *prop_name, int target_phandle,
-				  int target_off, int target_size,
-				  void *callback_value);
 
 int dtoverlay_set_synonym(DTBLOB_T *dtb, const char *dst, const char *src);
 
@@ -177,6 +188,11 @@ static inline void dtoverlay_dtb_set_trailer(DTBLOB_T *dtb,
     dtb->trailer_len = trailer_len;
     dtb->trailer_is_malloced = 0;
 }
+
+int dtoverlay_find_pins_for_device(DTBLOB_T *dtb, const char *symbol,
+                                   PIN_ITER_T *iter);
+
+int dtoverlay_next_pin(PIN_ITER_T *iter, int *pin, int *func, int *pull);
 
 int dtoverlay_find_phandle(DTBLOB_T *dtb, int phandle);
 
